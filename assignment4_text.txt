@@ -1,0 +1,136 @@
+National University of Computer and Emerging Sciences 
+Agentic AI CS-4015 (Section: A, B, C) 
+Course Project PHASE II 
+Due Date: 19th April 2026, Sunday 
+THE STUDIO FLOOR: 
+Video and Audio Synthesis Layer 
+■ Introduction 
+Phase 2 transforms the structured outputs of Phase 1 into multimodal audiovisual 
+content, enabling the transition from abstract narrative to perceptual media. 
+This phase implements a parallel multi -agent execution architecture , where 
+independent agents: 
+• Process audio and video streams concurrently 
+• Synchronize outputs through temporal alignment 
+• Maintain state continuity via shared memory 
+This phase directly satisfies the core requirement  of generating synchronized facial 
+geometry and audio waveform using multimodal inputs. 
+■ System Objectives 
+• Convert scene_manifest.json -> audiovisual scenes 
+• Generate: 
+o Voice (TTS / cloning) 
+o Video frames 
+o Face-mapped characters 
+o Lip-synced outputs 
+• Outputs: 
+o raw_scenes/scene_01.mp4 
+o Audio tracks (.wav) 
+o Intermediate frame sequences 
+ 
+■ Architectural Design Principles 
+3.1 Parallel Processing Architecture 
+This phase introduces parallel execution: 
+• Audio branch 
+• Video branch 
+Both converge at the Lip Sync Agent 
+3.2 Task Graph-based Execution 
+All scene processing is decomposed using: 
+• get_task_graph (MCP Tool) 
+Each scene becomes: 
+• Independent unit 
+• Parallelizable workload 
+3.3 Stateful Resumability 
+Using commit_memory, the system: 
+• Saves intermediate outputs 
+• Supports recovery in case of: 
+o Failure 
+o Interruptions 
+ 
+■ System Architecture (High-Level Flow) 
+ 
+
+■ Agents Definitions 
+5.1 Scene Parser Agent 
+Role: 
+Transform scene_manifest.json into executable tasks. 
+Core Responsibilities: 
+• Scene segmentation 
+• Task distribution 
+• Parallel routing 
+MCP Tools: 
+• get_task_graph 
+• commit_memory 
+5.2 Voice Synthesis Agent 
+Role: 
+Generates speech aligned with character identity. 
+Key Features: 
+• Voice cloning from reference audio 
+• Emotion-aware speech synthesis 
+Reasoning Flow: 
+• Retrieve character voice profile 
+• Map dialogue -> speech 
+• Generate waveform 
+MCP Tool: 
+• voice_cloning_synthesizer 
+5.3 Video Generation Agent 
+Role: 
+Generates scene visuals from: 
+• Character references 
+• Scene descriptions 
+Inputs: 
+• Visual cues 
+• Environment descriptions 
+MCP Tool: 
+• query_stock_footage 
+5.4 Face Swap Agent 
+Role: 
+Maps generated characters onto video frames. 
+Critical Constraints: 
+• Must validate identity before mapping 
+MCP Tools: 
+• face_swapper 
+• identity_validator 
+5.5 Lip Sync Agent 
+Role: 
+Synchronizes: 
+• Audio waveform 
+• Facial movements 
+Core functionality: 
+• Frame-by-frame alignment 
+• Temporal consistency 
+MCP Tool: 
+• lip_sync_aligner 
+ 
+■ MultiModal Synchronization 
+This phase solves a key challenge of Temporal Alignment Problem. 
+Ensures: 
+• Speech timing = lip motion 
+• Scene continuity 
+Handled via: 
+• Lip Sync Agent 
+• Frame alignment models 
+ 
+■ LangGraph Workflow Design 
+LangGraph uses: 
+• Send() API for branching 
+Nodes: 
+• Scene_parser_node 
+• Voice_synth_node 
+• Video_gen_node 
+• Face_swap_node 
+• Lip_sync_node 
+ 
+■ Deliverables 
+• raw_scenes/* .mp4 
+• Audio files 
+• Task graph logs 
+ 
+■ Evaluation Rubric (Phase 2) 
+Criteria Description Marks 
+Parallel Architecture Proper branching implementation 10 
+Audio Quality Natural speech synthesis 20 
+Video Quality Visual coherence 20 
+Lip Sync Accuracy Temporal alignment 10 
+MCP Tool Usage Correct integration 5 
+Fault Tolerance Resumability 5 
+Total  70 
+ 
