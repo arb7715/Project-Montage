@@ -1,0 +1,10 @@
+langgraph==0.0.45
+pydantic==2.11.3
+faiss-cpu==1.13.2
+ollama==0.1.0
+pillow==11.2.1
+numpy==2.2.4
+diffusers>=0.27.0
+transformers>=4.35.0
+torch>=2.0.0
+safetensors>=0.4.0
