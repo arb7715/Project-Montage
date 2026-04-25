@@ -1,0 +1,21 @@
+# Phase 2 requirements – The Studio Floor
+# Install with: pip install -r requirements_phase2.txt
+
+# Text-to-Speech (primary TTS backend)
+gTTS>=2.3.0
+
+# Offline TTS fallback (optional)
+pyttsx3>=2.90
+
+# Audio processing & WAV concatenation
+pydub>=0.25.1
+
+# Video assembly (primary)
+moviepy>=1.0.3
+
+# Video assembly (alternative backend)
+opencv-python>=4.8.0
+
+# Already in requirements.txt but listed for completeness
+pillow>=10.0.0
+numpy>=1.24.0
