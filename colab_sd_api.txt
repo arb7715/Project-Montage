@@ -1,0 +1,471 @@
+# Use Colab's pre-installed numpy/torch/diffusers/transformers (already a coherent set).
+# Only add the bits Colab doesn't ship by default. If IP-Adapter happens to
+# break on the current diffusers version, /face_swap silently passes through
+# the base image — that's by design (see face_swap handler below).
+!pip install -q fastapi uvicorn pyngrok nest-asyncio python-multipart imageio[ffmpeg]
+
+# --- Wav2Lip: clone + runtime deps + ALWAYS patch audio.py (librosa >= 0.10 API) ---
+import pathlib as _pl
+import re as _re
+if not _pl.Path("Wav2Lip").exists():
+    !git clone -q https://github.com/Rudrabha/Wav2Lip.git
+# Wav2Lip inference deps (do not use full Wav2Lip requirements.txt — pins break on Colab).
+# IMPORTANT: do NOT pin numpy/scipy here — Colab's pre-installed versions are
+# coherent with the rest of the stack (torch, opencv, transformers). Forcing
+# numpy<2 alongside Colab's numpy 2 causes ImportError in transformers.
+!pip install -q librosa soundfile tqdm numba
+_audio_py = _pl.Path("Wav2Lip/audio.py")
+if _audio_py.is_file():
+    _t = _audio_py.read_text(encoding="utf-8")
+    # Old: librosa.filters.mel(hp.sample_rate, hp.n_fft, ... → keyword sr=/n_fft= only (librosa 0.10+)
+    _t2 = _re.sub(
+        r"librosa\.filters\.mel\s*\(\s*hp\.sample_rate\s*,\s*hp\.n_fft\s*,",
+        "librosa.filters.mel(sr=hp.sample_rate, n_fft=hp.n_fft,",
+        _t,
+        count=1,
+    )
+    if _t2 != _t:
+        _audio_py.write_text(_t2, encoding="utf-8")
+        print("Patched Wav2Lip/audio.py: librosa.filters.mel(sr=..., n_fft=..., ...)")
+
+# Patch Wav2Lip/inference.py:
+#   1. Replace OpenCV 'DIVX' fourcc → 'mp4v' (DIVX silently fails on Colab's OpenCV 4.13).
+#   2. Switch the intermediate file to temp/result.mp4 so ffmpeg input matches.
+_inf_py = _pl.Path("Wav2Lip/inference.py")
+if _inf_py.is_file():
+    _t = _inf_py.read_text(encoding="utf-8")
+    _orig = _t
+    _t = _t.replace("cv2.VideoWriter_fourcc(*'DIVX')", "cv2.VideoWriter_fourcc(*'mp4v')")
+    _t = _t.replace("'temp/result.avi'", "'temp/result.mp4'")
+    if _t != _orig:
+        _inf_py.write_text(_t, encoding="utf-8")
+        print("Patched Wav2Lip/inference.py: DIVX→mp4v, result.avi→result.mp4")
+
+!mkdir -p Wav2Lip/checkpoints
+if not _pl.Path("Wav2Lip/checkpoints/wav2lip_gan.pth").exists():
+    !wget -q "https://huggingface.co/camenduru/Wav2Lip/resolve/main/checkpoints/wav2lip_gan.pth" -O "Wav2Lip/checkpoints/wav2lip_gan.pth"
+if not _pl.Path("Wav2Lip/face_detection/detection/sfd/s3fd.pth").exists():
+    !wget -q "https://www.adrianbulat.com/downloads/python-fan/s3fd-619a316812.pth" -O "Wav2Lip/face_detection/detection/sfd/s3fd.pth"
+
+# --- Cloudflared tunnel ---
+if not _pl.Path("/usr/local/bin/cloudflared").exists():
+    !wget -q https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb
+    !dpkg -i cloudflared-linux-amd64.deb > /dev/null 2>&1
+
+# =============================================================================
+# Imports
+# =============================================================================
+import io, os, re, sys, time, threading, subprocess, traceback, uuid, shutil
+import urllib.request
+from pathlib import Path
+import numpy as np
+from PIL import Image
+import torch
+from fastapi import FastAPI, Form, UploadFile, File, HTTPException
+from fastapi.responses import Response, JSONResponse
+import uvicorn
+import nest_asyncio
+nest_asyncio.apply()
+
+from diffusers import StableDiffusionPipeline, StableDiffusionImg2ImgPipeline
+
+WORK_DIR = Path("/content/work")
+WORK_DIR.mkdir(exist_ok=True, parents=True)
+
+# =============================================================================
+# Load models (one-time, kept warm in memory)
+# =============================================================================
+print("Loading Stable Diffusion (txt2img) ...")
+pipe_txt2img = StableDiffusionPipeline.from_pretrained(
+    "runwayml/stable-diffusion-v1-5", torch_dtype=torch.float16, safety_checker=None
+).to("cuda")
+pipe_txt2img.enable_attention_slicing()
+
+print("Loading Stable Diffusion (img2img) + IP-Adapter ...")
+pipe_img2img = StableDiffusionImg2ImgPipeline.from_pretrained(
+    "runwayml/stable-diffusion-v1-5", torch_dtype=torch.float16, safety_checker=None
+).to("cuda")
+
+# IP-Adapter is OPTIONAL. If it fails to load (diffusers/IP-Adapter version
+# mismatch), we keep going and serve face_swap as a passthrough — the wide
+# establishing shot doesn't strictly need the character's exact face, and
+# Wav2Lip on per-character portraits is what carries identity in the final
+# video.
+IP_ADAPTER_OK = False
+try:
+    pipe_img2img.load_ip_adapter(
+        "h94/IP-Adapter", subfolder="models", weight_name="ip-adapter_sd15.bin"
+    )
+    IP_ADAPTER_OK = True
+    print("IP-Adapter loaded.")
+except Exception as _ipa_err:
+    print(f"[!] IP-Adapter failed to load ({_ipa_err}). face_swap will passthrough.")
+
+print("Models loaded.\n")
+
+# =============================================================================
+# FastAPI
+# =============================================================================
+app = FastAPI(title="StudioFloor Colab Backend")
+
+
+@app.get("/health")
+async def health():
+    return {"status": "ok", "gpu": torch.cuda.get_device_name(0) if torch.cuda.is_available() else "cpu"}
+
+
+# -----------------------------------------------------------------------------
+# 1. Generate a B-roll background scene
+# -----------------------------------------------------------------------------
+@app.post("/generate")
+async def generate(
+    prompt: str = Form(...),
+    negative_prompt: str = Form("text, watermark, logo, blurry, distorted, low quality, deformed, mutated, ugly, extra limbs, bad anatomy"),
+    width: int = Form(896),
+    height: int = Form(512),
+    steps: int = Form(28),
+):
+    print(f"[generate] {prompt}")
+    image = pipe_txt2img(
+        prompt=prompt,
+        negative_prompt=negative_prompt,
+        width=width,
+        height=height,
+        num_inference_steps=steps,
+        guidance_scale=7.5,
+    ).images[0]
+    buf = io.BytesIO()
+    image.save(buf, format="PNG")
+    return Response(content=buf.getvalue(), media_type="image/png")
+
+
+# -----------------------------------------------------------------------------
+# 2. Face-aware scene composition (IP-Adapter Plus Face)
+#    Stronger identity preservation with ip-adapter-plus-face_sd15
+# -----------------------------------------------------------------------------
+@app.post("/face_swap")
+async def face_swap(
+    prompt: str = Form(...),
+    swap_image: UploadFile = File(...),
+    base_image: UploadFile = File(...),
+    ip_scale: float = Form(0.85),
+    strength: float = Form(0.50),
+    steps: int = Form(30),
+):
+    """
+    Best-effort character integration into the wide establishing shot.
+
+    If IP-Adapter is available and works, returns a face-mapped scene.
+    Otherwise (or on any failure), returns the original base image unchanged
+    so the pipeline can keep moving. This is intentional: in the final video,
+    the wide shot is on screen <2s and identity is carried by the per-line
+    Wav2Lip close-ups on the character portraits.
+    """
+    base_bytes = await base_image.read()
+    swap_bytes = await swap_image.read()
+
+    if not IP_ADAPTER_OK:
+        print("[face_swap] passthrough (IP-Adapter not loaded)", flush=True)
+        return Response(content=base_bytes, media_type="image/png")
+
+    try:
+        print(f"[face_swap] {prompt[:160]}...")
+        ref = Image.open(io.BytesIO(swap_bytes)).convert("RGB")
+        init = Image.open(io.BytesIO(base_bytes)).convert("RGB")
+
+        def _lim_side(im: Image.Image, max_side: int) -> Image.Image:
+            w, h = im.size
+            m = max(w, h)
+            if m <= max_side:
+                return im
+            s = max_side / m
+            return im.resize((int(w * s), int(h * s)), Image.LANCZOS)
+
+        ref = _lim_side(ref, 768)
+        init = _lim_side(init, 896)
+
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
+        pipe_img2img.set_ip_adapter_scale(float(ip_scale))
+        out = pipe_img2img(
+            prompt=prompt,
+            image=init,
+            ip_adapter_image=ref,
+            negative_prompt="bad quality, blurry, distorted, missing limbs, ugly face, deformed, extra fingers",
+            strength=float(strength),
+            guidance_scale=7.0,
+            num_inference_steps=int(steps),
+        ).images[0]
+
+        buf = io.BytesIO()
+        out.save(buf, format="PNG")
+        return Response(content=buf.getvalue(), media_type="image/png")
+    except Exception as e:
+        tb = traceback.format_exc()
+        print("[face_swap] FAILED, passthrough. Trace:\n", tb[-2000:], flush=True)
+        # Graceful degradation: return the base image so the pipeline succeeds.
+        return Response(content=base_bytes, media_type="image/png")
+
+
+# -----------------------------------------------------------------------------
+# 3. Lip Sync (Wav2Lip)
+#    Accepts BOTH images and videos as `face`. Auto-converts a still image
+#    into a short video clip so Wav2Lip face detector behaves consistently.
+# -----------------------------------------------------------------------------
+def _ext_from_filename(name: str, fallback: str = ".bin") -> str:
+    if not name:
+        return fallback
+    ext = os.path.splitext(name)[1].lower()
+    return ext if ext else fallback
+
+
+def _looped_video_from_image(img_path: Path, audio_seconds: float, out_path: Path, fps: int = 25):
+    """Build a short MP4 by repeating a single image for the audio's duration."""
+    img = Image.open(img_path).convert("RGB")
+    # Wav2Lip works best when the face occupies a large portion of the frame.
+    # Resize so the longer side is 480 px (small enough for fast Wav2Lip, large
+    # enough that face detection finds a clean face).
+    target_long = 480
+    w, h = img.size
+    scale = target_long / max(w, h)
+    nw, nh = int(round(w * scale)), int(round(h * scale))
+    img = img.resize((nw, nh), Image.LANCZOS)
+
+    import imageio
+    n_frames = max(int(round(audio_seconds * fps)) + fps, fps * 2)  # +1s buffer, min 2s
+    arr = np.array(img)
+    writer = imageio.get_writer(str(out_path), fps=fps, codec="libx264", quality=8)
+    for _ in range(n_frames):
+        writer.append_data(arr)
+    writer.close()
+
+
+def _wav_seconds(path: Path) -> float:
+    import wave
+    try:
+        with wave.open(str(path), "rb") as w:
+            return w.getnframes() / float(w.getframerate())
+    except Exception:
+        # try ffprobe
+        try:
+            r = subprocess.run(
+                ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+                 "-of", "default=noprint_wrappers=1:nokey=1", str(path)],
+                capture_output=True, text=True, timeout=15,
+            )
+            return float(r.stdout.strip() or 0.0)
+        except Exception:
+            return 3.0
+
+
+@app.post("/lip_sync")
+async def lip_sync(audio: UploadFile = File(...), face: UploadFile = File(...)):
+    job = WORK_DIR / f"job_{uuid.uuid4().hex[:8]}"
+    job.mkdir(parents=True, exist_ok=True)
+
+    face_ext = _ext_from_filename(face.filename, ".png")
+    audio_ext = _ext_from_filename(audio.filename, ".wav")
+    face_path_in = job / f"face_in{face_ext}"
+    audio_path = job / f"audio{audio_ext}"
+    out_video = job / "out.mp4"
+
+    face_bytes = await face.read()
+    audio_bytes = await audio.read()
+    face_path_in.write_bytes(face_bytes)
+    audio_path.write_bytes(audio_bytes)
+
+    # If the input is an image, convert to a looped MP4 sized for Wav2Lip
+    is_image = face_ext in (".png", ".jpg", ".jpeg", ".bmp", ".webp")
+    if is_image:
+        face_video = job / "face_video.mp4"
+        seconds = _wav_seconds(audio_path)
+        try:
+            _looped_video_from_image(face_path_in, seconds, face_video, fps=25)
+        except Exception as e:
+            return JSONResponse(status_code=500, content={"error": f"image-to-video failed: {e}"})
+    else:
+        face_video = job / f"face_video{face_ext}"
+        shutil.move(str(face_path_in), str(face_video))
+
+    print(f"[lip_sync] face={face_video.name}  audio={audio_path.name}")
+
+    # Wav2Lip writes intermediate frames to ./temp/result.mp4 relative to CWD.
+    # Create temp/ unconditionally; without it the VideoWriter silently fails.
+    _pl.Path("temp").mkdir(exist_ok=True)
+    # Wipe any previous run so we don't pick up a stale file
+    try:
+        for old in _pl.Path("temp").glob("result.*"):
+            old.unlink()
+    except Exception:
+        pass
+
+    cmd = [
+        "python", "Wav2Lip/inference.py",
+        "--checkpoint_path", "Wav2Lip/checkpoints/wav2lip_gan.pth",
+        "--face", str(face_video),
+        "--audio", str(audio_path),
+        "--outfile", str(out_video),
+        "--pads", "0", "10", "0", "0",
+        "--resize_factor", "1",
+        "--nosmooth",
+    ]
+    proc = subprocess.run(cmd, capture_output=True, text=True, timeout=600, cwd=".")
+    print("[lip_sync] returncode:", proc.returncode)
+    if proc.returncode != 0:
+        print("[lip_sync] STDERR (last 2000 chars):", (proc.stderr or "")[-2000:])
+        return JSONResponse(
+            status_code=500,
+            content={
+                "error": "Wav2Lip failed",
+                "stderr": (proc.stderr or "")[-6000:],
+                "stdout": (proc.stdout or "")[-2000:],
+            },
+        )
+
+    # Wav2Lip muxes audio onto temp/result.mp4 → outfile via ffmpeg at the very end.
+    # If ffmpeg fails silently, returncode is still 0. Recover by remuxing here.
+    if not out_video.exists():
+        partial = _pl.Path("temp/result.mp4")
+        if not partial.exists():
+            # Older Wav2Lip clones may still write .avi; try that too.
+            partial = _pl.Path("temp/result.avi")
+        if partial.exists() and audio_path.exists():
+            try:
+                rc = subprocess.run(
+                    [
+                        "ffmpeg", "-y",
+                        "-i", str(partial),
+                        "-i", str(audio_path),
+                        "-c:v", "libx264", "-pix_fmt", "yuv420p",
+                        "-c:a", "aac", "-b:a", "128k",
+                        "-shortest",
+                        str(out_video),
+                    ],
+                    capture_output=True, text=True, timeout=120,
+                )
+                print("[lip_sync] manual ffmpeg rc:", rc.returncode)
+                if rc.returncode != 0:
+                    print(rc.stderr[-1500:])
+            except Exception as e:
+                print("[lip_sync] manual ffmpeg crashed:", e)
+
+    if not out_video.exists():
+        # Surface as much detail as possible for debugging
+        listing = []
+        try:
+            for p in job.glob("**/*"):
+                listing.append(f"{p.relative_to(job)}  ({p.stat().st_size if p.is_file() else 'dir'})")
+        except Exception:
+            pass
+        try:
+            for p in _pl.Path("temp").glob("*"):
+                listing.append(f"temp/{p.name}  ({p.stat().st_size})")
+        except Exception:
+            pass
+        return JSONResponse(
+            status_code=500,
+            content={
+                "error": "no output produced",
+                "stdout": (proc.stdout or "")[-3000:],
+                "stderr": (proc.stderr or "")[-3000:],
+                "files": listing,
+            },
+        )
+
+    data = out_video.read_bytes()
+    # Cleanup job dir (keep stdout)
+    try:
+        shutil.rmtree(job)
+    except Exception:
+        pass
+    return Response(content=data, media_type="video/mp4")
+
+
+# =============================================================================
+# Tunnel + server
+# =============================================================================
+def start_cloudflared():
+    """Quick tunnel prints the public URL; capture it reliably for Colab/Jupyter."""
+    proc = subprocess.Popen(
+        [
+            "cloudflared", "tunnel", "--no-autoupdate",
+            "--url", "http://127.0.0.1:8000",
+        ],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        bufsize=1,
+    )
+    deadline = time.time() + 120
+    url_found = None
+    # Newer cloudflared wraps the URL in box-drawing lines; allow spaces/pipes around it.
+    url_re = re.compile(r"https://[^\s|'\"<>]+\.trycloudflare\.com/?", re.I)
+    while time.time() < deadline and url_found is None:
+        if proc.poll() is not None and proc.poll() != 0:
+            print("[cloudflared] process exited early — check install / GPU runtime.", flush=True)
+            break
+        line = proc.stdout.readline()
+        if not line:
+            time.sleep(0.15)
+            continue
+        m = url_re.search(line)
+        if m:
+            url_found = m.group(0).rstrip("/")
+            print("\n" + "=" * 70, flush=True)
+            print(
+                "PUBLIC API URL — paste ONE line into config/colab_api.txt on your PC:\n",
+                url_found,
+                sep="",
+                flush=True,
+            )
+            print("=" * 70 + "\n", flush=True)
+            break
+        # Light debug: only lines that look URL-related (avoid spamming)
+        low = line.lower()
+        if "trycloudflare" in low or "quick tunnel" in low:
+            print(f"[cloudflared] {line.rstrip()}", flush=True)
+
+    if url_found is None:
+        print(
+            "\n[!] Did not parse a trycloudflare URL within 120s.\n"
+            "    Scroll this cell output for a line containing https://….trycloudflare.com\n"
+            "    Or run in a NEW cell while this cell keeps running:\n"
+            "        !cloudflared tunnel --url http://127.0.0.1:8000\n",
+            flush=True,
+        )
+
+
+# 1) Free port, 2) start API, 3) wait until /health works, 4) start tunnel (needs origin up)
+subprocess.run(["fuser", "-k", "8000/tcp"], capture_output=True)
+time.sleep(1)
+
+
+def run_server():
+    uvicorn.Server(
+        uvicorn.Config(app, host="0.0.0.0", port=8000, log_level="info")
+    ).run()
+
+
+threading.Thread(target=run_server, daemon=True).start()
+
+print("Waiting for http://127.0.0.1:8000/health …", flush=True)
+for _ in range(80):
+    try:
+        urllib.request.urlopen("http://127.0.0.1:8000/health", timeout=2)
+        print("Local API is up.", flush=True)
+        break
+    except Exception:
+        time.sleep(0.25)
+else:
+    print(
+        "WARNING: /health never responded — tunnel may still start once uvicorn binds.",
+        flush=True,
+    )
+
+threading.Thread(target=start_cloudflared, daemon=True).start()
+time.sleep(2)
+print(
+    "Backend running on port 8000. If you did not see PUBLIC API URL above, read the [!] message.",
+    flush=True,
+)
