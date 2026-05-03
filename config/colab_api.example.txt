@@ -1,0 +1,5 @@
+# Paste ONE line: your active trycloudflare / ngrok URL for the Colab FastAPI (no trailing slash).
+# Example: https://xxxx.trycloudflare.com
+# Then save as colab_api.txt (same folder) — that file is gitignored.
+
+https://your-tunnel-subdomain.trycloudflare.com

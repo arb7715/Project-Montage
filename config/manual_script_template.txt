@@ -1,0 +1,18 @@
+SCENE: 1
+HEADING: INT. COFFEE SHOP - MORNING
+ACTION: Sarah enters the cafe and looks anxious.
+CHARACTER: Sarah
+I hope he shows up this time.
+CHARACTER: Waiter
+Would you like to order something while you wait?
+VISUAL: Warm natural light through the window.
+---
+SCENE: 2
+HEADING: EXT. COFFEE SHOP STREET - LATER
+ACTION: A black car stops outside and Daniel steps out.
+CHARACTER: Daniel
+Sorry I am late. Traffic was impossible.
+CHARACTER: Sarah
+You made it. That is what matters.
+VISUAL: Slight handheld camera movement to create urgency.
+---

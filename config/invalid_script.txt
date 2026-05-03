@@ -1,0 +1,3 @@
+This is not a valid screenplay.
+There are no scene headers or labels.
+Just prose text.
