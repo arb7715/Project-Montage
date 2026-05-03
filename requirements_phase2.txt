@@ -19,3 +19,6 @@ opencv-python>=4.8.0
 # Already in requirements.txt but listed for completeness
 pillow>=10.0.0
 numpy>=1.24.0
+
+# Phase 4 web UI
+streamlit>=1.28.0
