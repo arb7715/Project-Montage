@@ -60,6 +60,7 @@ def _run_phase(phase: int, extra_args: Optional[List[str]] = None
     try:
         r = subprocess.run(
             cmd, capture_output=True, text=True,
+            stdin=subprocess.DEVNULL,   # detach stdin so HITL auto-approves
             timeout=900, cwd=str(_REPO_ROOT), env=env,
         )
         return r.returncode == 0, (r.stdout + "\n" + r.stderr).strip()
