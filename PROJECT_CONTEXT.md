@@ -443,6 +443,67 @@ To keep this file highly token-efficient for future LLM handovers, every meaning
 
 ### 15.3 Change log (newest first)
 
+### 2026-05-06 00:48 (local) — Two open bugs to fix in next chat [DEFERRED]
+
+#### Bug A — Wav2Lip produces no output (lip-sync silently falls back to still portrait)
+
+**Symptom:**
+- RunPod terminal shows `[lip_sync] rc: 0` — Wav2Lip process exits successfully.
+- But the API response body contains `{"error":"no output produced", "stderr": "0%| | 0/1 [00:00<?, ?it/s]..."}`.
+- Local logs: `Wav2Lip API 500: {"error":"no output produced"...}` then `Wav2Lip failed for 'Maya' -> still portrait PiP`.
+- Final videos play but characters are frozen still-images during dialogue — no lip movement.
+
+**Root cause (confirmed from RunPod stderr):**
+`[lip_sync] rc: 0` is misleading. The Wav2Lip `inference.py` exits 0 even when the SFD face detector finds 0 faces in the input image. When the face detector returns empty, `inference.py` silently writes no output file and returns 0. The `runpod_startup.py` `/lip_sync` endpoint checks `if not out_video.exists()` and returns a 500. The local agent catches the 500 and gracefully falls back to still portrait.
+
+**Why face detection fails on SD-generated portraits:**
+The portraits are 512×512 SD outputs. SFD (S3FD) face detector in Wav2Lip expects a face of reasonable resolution with a clear frontal or near-frontal view. SD portrait images commonly have:
+1. Full-body or half-body framing — face too small in frame (< ~64 px) for SFD threshold.
+2. Off-axis, profile, or heavily stylized faces.
+3. Occasional artifacts at face boundary.
+The solution is NOT to re-train; it is to crop / resize the portrait to a face-only or head-and-shoulders tight crop before sending to Wav2Lip.
+
+**Exact fix required (to implement in next chat):**
+In `runpod_startup.py` → `/lip_sync` endpoint, before calling `inference.py`:
+1. Use a lightweight face detector (OpenCV Haar or `mediapipe.solutions.face_detection`) to locate the face bounding box in the portrait PNG.
+2. Crop+pad to the face region with ~30 % margin, then resize to 256×256.
+3. Save as `face_cropped.png` in the job temp dir.
+4. Pass `face_cropped.png` to Wav2Lip instead of the raw SD portrait.
+Alternatively: change the SD portrait prompt to force `close-up face portrait, head and shoulders, looking forward` so the face fills the frame (≥ 200 px) and SFD detects it reliably. Both fixes are needed together for robustness.
+
+**Files to change:**
+- `runpod_startup.py` → `/lip_sync` endpoint: add pre-crop step using `mediapipe` or `cv2.CascadeClassifier`.
+- `src/agents/image_synthesizer.py` → SD portrait generation prompt: add `close-up face portrait, head and shoulders, looking directly at camera`.
+
+---
+
+#### Bug B — Background looks generic / both scenes identical
+
+**Symptom:**
+Both scenes have heading `INT. SMALL OFFICE - MORNING`, so the SD prompt for both scenes is nearly identical. Background images look similar and generic.
+
+**Root cause:**
+`src/agents/video_generator.py` builds the SD prompt from `scene.heading + scene.actions + scene.visual_cues`. When Groq generates two scenes with the same heading but different actions, the heading dominates the prompt and both backgrounds look the same. The cinematic details in `actions` and `visual_cues` are appended but not weighted prominently.
+
+**Exact fix required:**
+In `src/agents/video_generator.py`, restructure the prompt so visual cues come first and heading is context only:
+- New order: `{visual_cues joined} | {action text} | {heading} | cinematic photograph, ...`
+- Add scene-specific stylistic modifiers derived from the action text (e.g. "tense, dark shadows, overhead fluorescent" for a recognition scene vs "bright morning professional office" for the opener).
+- Consider negative prompt: `"people, characters, faces, text, watermark"` for backgrounds.
+
+**Files to change:**
+- `src/agents/video_generator.py` → `_build_prompt()` method.
+
+---
+
+#### Summary of what IS working after this run (2026-05-06)
+- Phase 1: Groq `llama-3.1-8b-instant` generates correct 2-scene / 2-character manifest. ✅
+- edge-tts voice synthesis: both Maya (female) and Daniel (male) audio ✅
+- IP-Adapter face-swap (RunPod): runs in ~13 steps, portraits are identity-locked ✅
+- PiP composition: background + still-portrait overlays + timed subtitles ✅ (works, but no lip movement)
+- Versioned snapshot: v0002 saved ✅
+- Streamlit Pipeline tab: Phase 1 no longer hangs ✅
+
 ### 2026-05-06 00:25 (local) — Scriptwriter: Groq LLM + multi-character enforcement
 - Added: `config/groq_api.txt` (gitignored) and `config/groq_api.example.txt`. `.gitignore` now excludes `config/groq_api.txt`. `groq>=0.30.0` added to `requirements_phase2.txt`.
 - Changed: `src/agents/scriptwriter.py` rewritten — Groq Cloud (`llama-3.1-8b-instant`) is the primary script LLM; falls back to Ollama (`llama3.2:1b`) only if Groq is unavailable. New prompt forces ≥2 named characters across the script, ≥2 dialogues per scene, real `INT./EXT. PLACE - TIME` headings, and `scenes` array length == requested `num_scenes`. Post-parse code truncates over-produced scenes and pads under-produced ones with the existing default-scenes helper, then renumbers `scene_id` 1..N. Logs a warning if final character count <2.
