@@ -443,6 +443,12 @@ To keep this file highly token-efficient for future LLM handovers, every meaning
 
 ### 15.3 Change log (newest first)
 
+### 2026-05-05 17:35 (local) — GitHub history rebuild (phase-aligned commits)
+- Changed: Rebuilt `main` as 26 backdated commits (`chore` / `feat` / `docs` / `test`) from 2026-04-20–2026-05-04; remote `https://github.com/arb7715/Project-Montage`.
+- Why: Course-style history showing Writer's Room → Studio Floor → PiP → StateManager/Edit → Streamlit → handover docs, without changing final tree.
+- Impact: `git log` reads as incremental development; `requirements_phase2.txt` gains Streamlit only in the Phase 4 chore commit.
+- Next: `git push -u origin main` after `git remote add origin …` (requires GitHub auth).
+
 ### 2026-05-05 17:10 (local) — Git repository + GitHub-ready layout
 - Changed: Added root `.gitignore` (ignores `venv/`, `.venv/`, `outputs/`, `config/colab_api.txt`), `config/colab_api.example.txt`, `README.md`, `streamlit` pin in `requirements_phase2.txt`; initialized git with 4 commits on `main`.
 - Why: User needed version control and pushes to GitHub with clean history.
