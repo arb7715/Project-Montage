@@ -315,20 +315,30 @@ async def lip_sync(audio: UploadFile = File(...), face: UploadFile = File(...)):
 
     is_image = face_ext in (".png", ".jpg", ".jpeg", ".bmp", ".webp")
     if is_image:
-        # Crop to a tight head-shot so Wav2Lip's SFD face detector reliably
-        # fires on SD-generated portraits (full-body or small face → no detection).
-        face_cropped = _crop_face_for_wav2lip(face_in)
+        # Optional pre-crop helps when SD portraits frame the face very small.
+        # Disabled by default: the colab/runpod working baseline simply resized
+        # the raw portrait to 480 px and SFD detected it fine. Set
+        # WAV2LIP_FACE_CROP=1 in the pod env to opt in.
+        face_for_video = face_in
+        if os.environ.get("WAV2LIP_FACE_CROP", "0") == "1":
+            face_for_video = _crop_face_for_wav2lip(face_in)
         face_video = job / "face_video.mp4"
-        _image_to_video(face_cropped, _wav_seconds(audio_path), face_video)
+        _image_to_video(face_for_video, _wav_seconds(audio_path), face_video)
     else:
         face_video = job / f"face_video{face_ext}"
         shutil.move(str(face_in), str(face_video))
 
-    out_video = job / "out.mp4"
-    Path("temp").mkdir(exist_ok=True)
-    for old in Path("temp").glob("result.*"):
+    # Wav2Lip writes intermediate frames to `temp/result.mp4` *relative to the
+    # subprocess cwd* (which is /workspace). If that directory doesn't exist
+    # OpenCV's VideoWriter silently writes nowhere and inference.py exits 0
+    # with no output. Anchor the path to /workspace so we stay consistent
+    # regardless of where uvicorn was launched from.
+    temp_dir = WS / "temp"
+    temp_dir.mkdir(parents=True, exist_ok=True)
+    for old in temp_dir.glob("result.*"):
         old.unlink(missing_ok=True)
 
+    out_video = job / "out.mp4"
     cmd = [
         "python", str(WAV2LIP_DIR / "inference.py"),
         "--checkpoint_path", str(WAV2LIP_CKP),
@@ -341,23 +351,38 @@ async def lip_sync(audio: UploadFile = File(...), face: UploadFile = File(...)):
     proc = subprocess.run(cmd, capture_output=True, text=True, timeout=600, cwd=str(WS))
     print("[lip_sync] rc:", proc.returncode)
 
+    # Recovery path: if Wav2Lip's internal ffmpeg muxing failed but the raw
+    # frames file exists, mux it ourselves. Use absolute paths.
     if not out_video.exists():
-        for partial_name in ("temp/result.mp4", "temp/result.avi"):
-            partial = Path(partial_name)
-            if partial.exists():
-                subprocess.run(
-                    ["ffmpeg", "-y", "-i", str(partial), "-i", str(audio_path),
+        for candidate in (temp_dir / "result.mp4", temp_dir / "result.avi"):
+            if candidate.exists() and candidate.stat().st_size > 0:
+                rc = subprocess.run(
+                    ["ffmpeg", "-y", "-i", str(candidate), "-i", str(audio_path),
                      "-c:v", "libx264", "-pix_fmt", "yuv420p",
                      "-c:a", "aac", "-b:a", "128k", "-shortest", str(out_video)],
-                    capture_output=True, timeout=120,
+                    capture_output=True, text=True, timeout=120,
                 )
+                print(f"[lip_sync] manual mux rc={rc.returncode}")
                 break
 
     if not out_video.exists():
+        # Surface enough state for the next debug pass.
+        listing = []
+        for p in job.glob("**/*"):
+            try:
+                listing.append(f"{p.relative_to(job)} ({p.stat().st_size if p.is_file() else 'dir'})")
+            except Exception:
+                pass
+        for p in temp_dir.glob("*"):
+            try:
+                listing.append(f"temp/{p.name} ({p.stat().st_size})")
+            except Exception:
+                pass
         return JSONResponse(status_code=500, content={
             "error": "no output produced",
-            "stderr": (proc.stderr or "")[-4000:],
-            "stdout": (proc.stdout or "")[-2000:],
+            "stderr": (proc.stderr or "")[-8000:],
+            "stdout": (proc.stdout or "")[-3000:],
+            "files": listing,
         })
 
     data = out_video.read_bytes()

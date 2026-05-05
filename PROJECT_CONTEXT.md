@@ -2,7 +2,7 @@
 
 > **Audience:** A fresh LLM/agent that needs full project context in a single read.
 > **Read order:** Top to bottom. Section 11 (Pending Work) is the action queue.
-> **Last updated:** 2026-05-05
+> **Last updated:** 2026-05-06
 
 ---
 
@@ -444,6 +444,22 @@ To keep this file highly token-efficient for future LLM handovers, every meaning
 ```
 
 ### 15.3 Change log (newest first)
+
+### 2026-05-06 01:35 (local) — Wav2Lip real fix: anchor `temp/` to `/workspace`
+- Changed: `runpod_startup.py` `/lip_sync` — `temp_dir = WS / "temp"`; cleanup, recovery ffmpeg mux, and the "no output" file listing all use that absolute path. Stderr no longer truncated to 4 KB (now 8 KB) and the response includes a directory listing of `job/` and `temp/`. Face pre-crop is now opt-in via `WAV2LIP_FACE_CROP=1` env var (default off — matches the original colab path that worked).
+- Why: Previous "Bug A" diagnosis blamed SFD failing on SD portraits, but RunPod logs proved face detection succeeded (`face crop: (68,15,361,361)`) yet Wav2Lip still produced no output. Real cause is documented in section 6 gotchas: Wav2Lip writes `temp/result.mp4` relative to the subprocess cwd (`/workspace`), but our handler created/cleaned `Path("temp")` relative to wherever uvicorn was launched from. When those don't match, OpenCV's VideoWriter silently fails and `inference.py` exits 0 with no output — exactly the symptom we saw.
+- Impact: Wav2Lip should now produce real lip-synced video on RunPod. Identity portraits no longer need to be aggressively cropped to work.
+- Next: Rerun pipeline; if a /lip_sync still 500s, the error JSON now includes `files` listing + 8 KB stderr — read it before changing code.
+
+### 2026-05-06 — Clean `outputs/` for pipeline rerun (again)
+- Changed: Emptied repo `outputs/` again (recreate empty folder) for a fresh pipeline run.
+- Next: Run Phase 1 then Phase 2+3 (or full Streamlit pipeline).
+
+### 2026-05-06 — Clean `outputs/` for pipeline rerun
+- Changed: Deleted all contents under repo `outputs/` (manifests, logs, audio, images, `raw_scenes`, `memory`, `versions`, etc.); recreated empty `outputs/` directory.
+- Why: Fresh end-to-end pipeline run without stale Phase 1–3 artifacts or version snapshots.
+- Impact: Phase 1 must be run again before Phase 2/3; `outputs/versions/` counters reset on next snapshot.
+- Next: Run full pipeline (Streamlit or `python -m src.main` then `python -m src.main_phase2`).
 
 ### 2026-05-06 01:10 (local) — Bug A + Bug B fixes (Wav2Lip face detection & background diversity)
 - Changed: `runpod_startup.py` — added `_crop_face_for_wav2lip()` helper (OpenCV Haar + center-top fallback); wired into `/lip_sync` endpoint before `_image_to_video` so Wav2Lip always receives a 256×256 head-shot crop instead of the raw SD portrait.
