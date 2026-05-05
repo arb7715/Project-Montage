@@ -105,7 +105,8 @@ def main():
         
         initial_state = WorkflowState(
             mode="manual",
-            user_input=script_content
+            user_input=script_content,
+            num_scenes=args.num_scenes,
         )
         logger.info(f"Manual mode: Loaded script from {args.script_file}")
     
@@ -117,7 +118,8 @@ def main():
         
         initial_state = WorkflowState(
             mode="autonomous",
-            user_input=args.prompt
+            user_input=args.prompt,
+            num_scenes=args.num_scenes,
         )
         logger.info(f"Autonomous mode: Using prompt - {args.prompt}")
     

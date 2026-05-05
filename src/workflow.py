@@ -5,7 +5,7 @@ Implements the Supervisor-Worker hierarchical model with LangGraph StateGraph
 import logging
 from typing import Dict, Any, Optional, Literal
 from langgraph.graph import StateGraph, END
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields, fields
 
 from src.agents.scriptwriter import ScriptwriterAgent
 from src.agents.validator import ValidatorAgent
@@ -23,6 +23,7 @@ class WorkflowState:
     """Shared state across all agents in the workflow."""
     mode: Literal["manual", "autonomous"] = "autonomous"
     user_input: Optional[str] = None
+    num_scenes: int = 3
     
     # Scriptwriter outputs
     script: Optional[ScriptManifest] = None
@@ -73,7 +74,9 @@ class WritersRoomWorkflow:
         if isinstance(state, WorkflowState):
             return state
         if isinstance(state, dict):
-            return WorkflowState(**state)
+            names = {f.name for f in fields(WorkflowState)}
+            filtered = {k: v for k, v in state.items() if k in names}
+            return WorkflowState(**filtered)
         raise TypeError(f"Unsupported state type: {type(state)}")
 
     def _state_out(self, state: WorkflowState) -> Dict[str, Any]:
@@ -192,7 +195,7 @@ class WritersRoomWorkflow:
         
         result = self.scriptwriter.execute({
             "prompt": state.user_input or "A compelling story unfolds",
-            "num_scenes": 3
+            "num_scenes": getattr(state, "num_scenes", 3),
         })
         
         if result["success"]:

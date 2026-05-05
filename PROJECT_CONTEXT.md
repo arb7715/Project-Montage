@@ -443,6 +443,12 @@ To keep this file highly token-efficient for future LLM handovers, every meaning
 
 ### 15.3 Change log (newest first)
 
+### 2026-05-05 (local) — Streamlit Phase 1 hang + scene count wiring
+- Changed: `hitl_agent.py` — if `stdin` is not a TTY (Streamlit subprocess, CI), auto-approve script instead of blocking on `input()` forever; EOF on `input()` also approves (non-interactive).
+- Changed: `workflow.py` — `WorkflowState.num_scenes`; scriptwriter receives Streamlit/cli `--num-scenes` (was hardcoded to 3); `_coerce_state` filters dict keys to dataclass fields (LangGraph safety).
+- Changed: `main.py` — passes `num_scenes=args.num_scenes` into initial `WorkflowState`.
+- Impact: Pipeline tab Phase 1 no longer freezes after script generation; requested scene count is honored.
+
 ### 2026-05-05 17:52 (local) — RunPod GPU backend integration
 - Added: `runpod_startup.py` — drop-in replacement for `colab_sd_api.txt`; models persist to `/workspace/models` (RunPod Network Volume); no Cloudflare tunnel; exposes FastAPI on pod port 8000 (`https://<POD_ID>-8000.proxy.runpod.net`).
 - Changed: `src/ui/app.py` sidebar "Colab Tunnel" section replaced by "GPU Backend" — editable URL input, Save + Check buttons, live `/health` banner; works with RunPod or Colab URLs interchangeably; URL written to `config/colab_api.txt` as before.
