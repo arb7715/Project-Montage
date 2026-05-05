@@ -14,6 +14,10 @@ Architecture note
 Streamlit calls the pipeline as a subprocess so the UI stays responsive
 while the (slow) SD / Wav2Lip steps run.  Progress is tracked by polling
 output files that the pipeline writes incrementally.
+
+GPU backend URL is configured in the sidebar (saved to config/colab_api.txt).
+Works with RunPod, Colab tunnels, or any FastAPI endpoint that implements
+the /health, /generate, /face_swap, and /lip_sync routes.
 """
 from __future__ import annotations
 
@@ -21,6 +25,7 @@ import os
 import subprocess
 import sys
 import time
+import urllib.request
 from pathlib import Path
 from typing import List, Optional
 
@@ -70,9 +75,30 @@ def _get_videos() -> List[Path]:
     return sorted(SCENES_DIR.glob("scene_*_final.mp4"))
 
 
-def _colab_url() -> str:
+def _gpu_url() -> str:
     p = CONFIG_DIR / "colab_api.txt"
-    return p.read_text().strip() if p.exists() else "(not set)"
+    return p.read_text().strip() if p.exists() else ""
+
+
+def _save_gpu_url(url: str) -> None:
+    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    (CONFIG_DIR / "colab_api.txt").write_text(url.strip(), encoding="utf-8")
+
+
+def _check_health(url: str) -> tuple[bool, str]:
+    """Return (ok, message) from the /health endpoint."""
+    try:
+        req = urllib.request.urlopen(url.rstrip("/") + "/health", timeout=5)
+        import json
+        data = json.loads(req.read().decode())
+        gpu  = data.get("gpu", "unknown GPU")
+        return True, f"Online · {gpu}"
+    except Exception as exc:
+        return False, str(exc)[:120]
+
+
+# Alias kept for backward compatibility with pipeline agents that read this file
+_colab_url = _gpu_url
 
 
 # ── Page config ───────────────────────────────────────────────────────────────
@@ -116,12 +142,48 @@ with st.sidebar:
         st.info("No active version yet")
 
     st.divider()
-    st.subheader("Colab Tunnel")
-    url = _colab_url()
-    if url.startswith("https://"):
-        st.success(url)
+    st.subheader("GPU Backend")
+
+    saved_url = _gpu_url()
+    new_url = st.text_input(
+        "API URL",
+        value=saved_url,
+        placeholder="https://<pod-id>-8000.proxy.runpod.net",
+        help=(
+            "RunPod: https://<POD_ID>-8000.proxy.runpod.net\n"
+            "Colab:  https://<random>.trycloudflare.com"
+        ),
+    )
+
+    col_save, col_check = st.columns(2)
+    save_clicked  = col_save.button("Save", use_container_width=True)
+    check_clicked = col_check.button("Check", use_container_width=True)
+
+    if save_clicked and new_url.strip():
+        _save_gpu_url(new_url.strip())
+        st.success("Saved.")
+
+    if check_clicked:
+        url_to_check = new_url.strip() or saved_url
+        if url_to_check:
+            ok, msg = _check_health(url_to_check)
+            if ok:
+                st.success(f"✅ {msg}")
+            else:
+                st.error(f"❌ {msg}")
+        else:
+            st.warning("Enter a URL first.")
+
+    # Persistent status indicator (shown every render)
+    current_url = new_url.strip() or saved_url
+    if current_url:
+        if current_url.startswith("https://") or current_url.startswith("http://"):
+            st.caption(f"Configured: `{current_url[:55]}…`" if len(current_url) > 55
+                       else f"Configured: `{current_url}`")
+        else:
+            st.warning("URL looks invalid — should start with https://")
     else:
-        st.warning("Not configured  →  `config/colab_api.txt`")
+        st.warning("Not configured — paste your RunPod URL above.")
 
     st.divider()
     st.caption("CS-4015 Agentic AI · FAST NUCES")

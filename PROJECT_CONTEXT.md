@@ -443,6 +443,13 @@ To keep this file highly token-efficient for future LLM handovers, every meaning
 
 ### 15.3 Change log (newest first)
 
+### 2026-05-05 17:52 (local) — RunPod GPU backend integration
+- Added: `runpod_startup.py` — drop-in replacement for `colab_sd_api.txt`; models persist to `/workspace/models` (RunPod Network Volume); no Cloudflare tunnel; exposes FastAPI on pod port 8000 (`https://<POD_ID>-8000.proxy.runpod.net`).
+- Changed: `src/ui/app.py` sidebar "Colab Tunnel" section replaced by "GPU Backend" — editable URL input, Save + Check buttons, live `/health` banner; works with RunPod or Colab URLs interchangeably; URL written to `config/colab_api.txt` as before.
+- Why: Colab free-tier is unreliable (runtime disconnects, 12 h limits); RunPod charges only when GPU is running (~$0.20–0.44/hr for T4/3090), persistent volume keeps models downloaded across sessions.
+- Impact: `colab_sd_api.txt` still present for reference; `runpod_startup.py` is the canonical GPU server going forward.
+- Next: Create RunPod pod → paste URL into Streamlit sidebar → click Check → run Full Pipeline.
+
 ### 2026-05-05 17:35 (local) — GitHub history rebuild (phase-aligned commits)
 - Changed: Rebuilt `main` as 26 backdated commits (`chore` / `feat` / `docs` / `test`) from 2026-04-20–2026-05-04; remote `https://github.com/arb7715/Project-Montage`.
 - Why: Course-style history showing Writer's Room → Studio Floor → PiP → StateManager/Edit → Streamlit → handover docs, without changing final tree.
