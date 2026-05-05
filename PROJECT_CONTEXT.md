@@ -366,6 +366,8 @@ If ANY of those break in a fresh chat:
 7. ⬜ **[Bonus]** Extend `scene_manifest.json` with `shots[]` and refactor `LipSyncAgent._compose_scene` to drive off it. Only if 1–4 are done.
 8. ⬜ **[Bonus]** Crossfades between shots, BGM mixing.
 9. ⬜ **[Submission]** Project report (8–12 pages). 3–7 minute demo video showing initial generation → 3 edits → 2 reverts. (README is in repo.)
+10. ✅ **[Bug A fix]** Wav2Lip face pre-crop in `runpod_startup.py` + tight portrait prompt in `image_synthesizer.py`.
+11. ✅ **[Bug B fix]** Diverse backgrounds via restructured `_build_prompt()` in `video_generator.py`.
 
 ---
 
@@ -442,6 +444,12 @@ To keep this file highly token-efficient for future LLM handovers, every meaning
 ```
 
 ### 15.3 Change log (newest first)
+
+### 2026-05-06 01:10 (local) — Bug A + Bug B fixes (Wav2Lip face detection & background diversity)
+- Changed: `runpod_startup.py` — added `_crop_face_for_wav2lip()` helper (OpenCV Haar + center-top fallback); wired into `/lip_sync` endpoint before `_image_to_video` so Wav2Lip always receives a 256×256 head-shot crop instead of the raw SD portrait.
+- Changed: `src/agents/image_synthesizer.py` — `_construct_prompt()` now leads with `close-up face portrait, head and shoulders only, looking directly at camera`; `_construct_negative_prompt()` adds `full body, wide shot, background scenery, profile view` to prevent non-frontal/full-body SD output.
+- Changed: `src/agents/video_generator.py` — `_build_prompt()` restructured: visual cues → filtered action text → heading → cinematic boilerplate; negative prompt for `/generate` now includes `people, person, faces, characters` to keep B-roll background empty for IP-Adapter injection.
+- Next: Re-run full pipeline on RunPod to confirm lip movement in final MP4s; then demo video (3 edits + 2 reverts) for submission.
 
 ### 2026-05-06 00:48 (local) — Two open bugs to fix in next chat [DEFERRED]
 

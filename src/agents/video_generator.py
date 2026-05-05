@@ -111,22 +111,52 @@ class VideoGeneratorAgent(BaseAgent):
 
     def _build_prompt(self, scene_task: SceneTask) -> str:
         """
-        Force-include a clearly visible person facing the camera so IP-Adapter
-        has a face to operate on in the establishing shot.
+        Build a scene-specific SD prompt for the wide establishing B-roll.
+
+        Priority order (most scene-differentiating first):
+          1. Visual cues — the art-director note, usually the most specific.
+          2. Action description — gives mood and staging.
+          3. Heading context — location / time of day.
+          4. Cinematic boilerplate — quality anchor.
+
+        Keeps the background *empty of recognisable faces/people* so that the
+        IP-Adapter face-swap can inject the correct character later without
+        fighting an existing face.
         """
-        bits = [
-            scene_task.heading,
+        parts: list[str] = []
+
+        # 1. Visual cues lead (most differentiating)
+        if scene_task.visual_cues:
+            parts.extend(scene_task.visual_cues[:2])
+
+        # 2. Action mood — extract environment/mood words, skip character names
+        if scene_task.actions:
+            action_text = scene_task.actions[0]
+            # Strip known character names so they don't anchor the BG prompt
+            char_names = {c.lower() for c in (scene_task.characters or [])}
+            filtered = " ".join(
+                w for w in action_text.split()
+                if w.lower().rstrip(".,") not in char_names
+            )
+            if filtered.strip():
+                parts.append(filtered.strip())
+
+        # 3. Heading provides location / time-of-day context
+        if scene_task.heading:
+            parts.append(scene_task.heading)
+
+        # 4. Cinematic quality boilerplate
+        parts += [
             "cinematic photograph",
+            "establishing shot",
+            "wide angle",
             "soft natural lighting",
             "shallow depth of field",
-            "a single person standing in the scene, facing the camera",
-            "medium-wide shot",
+            "rich environmental detail",
+            "8k",
         ]
-        if scene_task.actions:
-            bits.append(scene_task.actions[0])
-        if scene_task.visual_cues:
-            bits.append(scene_task.visual_cues[0])
-        return ", ".join(bits)
+
+        return ", ".join(parts)
 
     def _get_colab_url(self) -> str:
         path = Path("config/colab_api.txt")
@@ -145,8 +175,9 @@ class VideoGeneratorAgent(BaseAgent):
             payload = {
                 "prompt": prompt,
                 "negative_prompt": (
+                    "people, person, faces, characters, portraits, humans, crowd, "
                     "text, watermark, logo, blurry, distorted, low quality, deformed, "
-                    "mutated, ugly, extra limbs, bad anatomy, multiple heads, multiple faces"
+                    "mutated, ugly, extra limbs, bad anatomy, multiple heads"
                 ),
                 "width": SD_W,
                 "height": SD_H,

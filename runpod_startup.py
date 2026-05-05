@@ -226,6 +226,51 @@ def _ext(name: str, fallback: str = ".bin") -> str:
     e = os.path.splitext(name)[1].lower()
     return e if e else fallback
 
+
+def _crop_face_for_wav2lip(img_path: Path) -> Path:
+    """
+    Detect the largest face in a portrait and return a tight crop
+    (head-and-shoulders, 40% margin, resized to 256×256) for Wav2Lip.
+    Falls back to a centered 60% crop when no face is detected by Haar.
+    The original file is untouched; cropped version saved alongside it.
+    """
+    try:
+        import cv2 as _cv2
+        img = _cv2.imread(str(img_path))
+        if img is None:
+            return img_path
+        h, w = img.shape[:2]
+        gray = _cv2.cvtColor(img, _cv2.COLOR_BGR2GRAY)
+        cascade_xml = _cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
+        detector = _cv2.CascadeClassifier(cascade_xml)
+
+        faces = detector.detectMultiScale(
+            gray, scaleFactor=1.05, minNeighbors=3, minSize=(24, 24)
+        )
+        if len(faces) > 0:
+            x, y, fw, fh = max(faces, key=lambda f: f[2] * f[3])
+            margin = int(max(fw, fh) * 0.40)
+            x1, y1 = max(0, x - margin), max(0, y - margin)
+            x2, y2 = min(w, x + fw + margin), min(h, y + fh + margin)
+            crop = img[y1:y2, x1:x2]
+            print(f"[lip_sync] face crop: ({x},{y},{fw},{fh}) → ({x1},{y1})-({x2},{y2})")
+        else:
+            # No face found — take the upper-center 60% (head is usually there)
+            cw, ch = int(w * 0.65), int(h * 0.65)
+            x1 = (w - cw) // 2
+            y1 = max(0, int(h * 0.05))
+            crop = img[y1: y1 + ch, x1: x1 + cw]
+            print("[lip_sync] no face detected; using center-top crop fallback")
+
+        crop_resized = _cv2.resize(crop, (256, 256), interpolation=_cv2.INTER_LANCZOS4)
+        out_path = img_path.parent / ("face_cropped" + img_path.suffix)
+        _cv2.imwrite(str(out_path), crop_resized)
+        return out_path
+    except Exception as exc:
+        print(f"[lip_sync] face crop failed ({exc}); using original portrait")
+        return img_path
+
+
 def _wav_seconds(path: Path) -> float:
     try:
         with wave.open(str(path), "rb") as w:
@@ -270,8 +315,11 @@ async def lip_sync(audio: UploadFile = File(...), face: UploadFile = File(...)):
 
     is_image = face_ext in (".png", ".jpg", ".jpeg", ".bmp", ".webp")
     if is_image:
+        # Crop to a tight head-shot so Wav2Lip's SFD face detector reliably
+        # fires on SD-generated portraits (full-body or small face → no detection).
+        face_cropped = _crop_face_for_wav2lip(face_in)
         face_video = job / "face_video.mp4"
-        _image_to_video(face_in, _wav_seconds(audio_path), face_video)
+        _image_to_video(face_cropped, _wav_seconds(audio_path), face_video)
     else:
         face_video = job / f"face_video{face_ext}"
         shutil.move(str(face_in), str(face_video))

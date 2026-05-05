@@ -134,25 +134,37 @@ class ImageSynthesizerAgent(BaseAgent):
     
     def _construct_prompt(self, appearance_description: str, reference_style: str, gender: str = "unknown") -> str:
         if gender == "female":
-            gender_prefix = "beautiful woman, female portrait"
+            gender_prefix = "beautiful woman, female"
         elif gender == "male":
-            gender_prefix = "handsome man, male portrait"
+            gender_prefix = "handsome man, male"
         else:
-            gender_prefix = "character portrait"
+            gender_prefix = "character"
 
         style_modifiers = {
             "realistic": "photorealistic",
             "stylized": "stylized character portrait",
             "anime": "anime portrait",
-            "cartoon": "cartoon portrait"
+            "cartoon": "cartoon portrait",
         }
 
         style_prompt = style_modifiers.get(reference_style, "portrait")
         appearance_summary = self._summarize_appearance(appearance_description)
-        return f"{gender_prefix}, {style_prompt}, {appearance_summary}, high quality, detailed face, studio lighting"
+        # Force tight head-shot framing so Wav2Lip's SFD face detector fires
+        # reliably on the generated portrait (face must be large in frame).
+        return (
+            f"close-up face portrait, head and shoulders only, looking directly at camera, "
+            f"{gender_prefix}, {style_prompt}, {appearance_summary}, "
+            f"sharp focus on face, detailed eyes and lips, neutral background, "
+            f"high quality, studio lighting, 4k"
+        )
 
     def _construct_negative_prompt(self, gender: str = "unknown") -> str:
-        base_negative = "text, watermark, blurry, low quality, deformed, distorted, extra limbs, disfigured, bad anatomy"
+        base_negative = (
+            "text, watermark, blurry, low quality, deformed, distorted, "
+            "extra limbs, disfigured, bad anatomy, full body, wide shot, "
+            "background scenery, landscape, multiple people, crowd, "
+            "profile view, side view, looking away, closed eyes"
+        )
         if gender == "female":
             return f"{base_negative}, masculine features, beard, stubble, muscular, male"
         elif gender == "male":
