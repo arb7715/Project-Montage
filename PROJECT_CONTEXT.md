@@ -27,10 +27,10 @@
 | Phase 1    | Writer's Room              | DONE        | Outputs: `scene_manifest.json`, `character_db.json`, `outputs/images/`, LangGraph workflow |
 | Phase 2    | Studio Floor (audio half)  | DONE        | edge-tts → per-line WAV + merged scene WAV   |
 | Phase 3    | Studio Floor (video half)  | MOSTLY DONE | Wide B-roll → IP-Adapter passthrough → per-line Wav2Lip close-ups → composed scene MP4 |
-| Phase 4    | Web Interface              | NOT STARTED | FastAPI backend + React/Next.js or Streamlit frontend |
-| Phase 5    | Edit Agent + Undo          | NOT STARTED | LangGraph intent classifier + version-snapshot store |
+| Phase 4    | Web Interface              | DONE        | Streamlit `src/ui/app.py`; optional FastAPI later                             |
+| Phase 5    | Edit Agent + Undo          | DONE        | `StateManager` + `EditAgent`; snapshots in `outputs/versions/`               |
 
-**Critical:** Phases 4 and 5 are 10% + 20% of the grade. They are mandatory and currently missing.
+**Note:** Phases 4 and 5 are implemented in-tree (Streamlit UI, StateManager snapshots, Edit Agent). FastAPI routes remain optional polish.
 
 ---
 
@@ -361,11 +361,11 @@ If ANY of those break in a fresh chat:
 2. ✅ **[P5 minimum]** `src/agents/edit_agent.py` — LangGraph intent classifier (Ollama + keyword fallback) + routing table for all 7 master-doc §5.1 queries.
 3. ✅ **[P4 minimum]** `src/ui/app.py` — Streamlit 3-tab UI: Pipeline / Edit & Undo / History. `streamlit run src/ui/app.py`.
 4. ⬜ **[P4 backend]** FastAPI routes (only if time permits; Streamlit calls agents directly for now).
-5. ⬜ **[Polish]** Subtitle burn-in in `LipSyncAgent` (~30 LOC, big quality win).
-6. ⬜ **[Polish]** Action banners on establishing shots (~20 LOC).
+5. ✅ **[Polish]** Subtitles + timed action banners in `LipSyncAgent` (PiP mode).
+6. ⬜ **[Polish]** (Optional extra) Extend action banners beyond opening seconds only.
 7. ⬜ **[Bonus]** Extend `scene_manifest.json` with `shots[]` and refactor `LipSyncAgent._compose_scene` to drive off it. Only if 1–4 are done.
 8. ⬜ **[Bonus]** Crossfades between shots, BGM mixing.
-9. ⬜ **[Submission]** README.md with setup + execution steps. Project report (8–12 pages). 3–7 minute demo video showing initial generation → 3 edits → 2 reverts.
+9. ⬜ **[Submission]** Project report (8–12 pages). 3–7 minute demo video showing initial generation → 3 edits → 2 reverts. (README is in repo.)
 
 ---
 
