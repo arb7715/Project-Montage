@@ -31,7 +31,10 @@ from pathlib import Path
 # ── pip installs (idempotent) ────────────────────────────────────────────────
 _PKGS = [
     "fastapi", "uvicorn[standard]", "python-multipart",
-    "diffusers>=0.27.0", "transformers>=4.35.0", "accelerate", "safetensors",
+    # Keep these pinned; newer transformers builds can break with some
+    # preinstalled torch versions on hosted GPU images.
+    "diffusers==0.27.2", "transformers==4.41.2",
+    "accelerate==0.30.1", "safetensors==0.4.3",
     "invisible_watermark",          # required by SD safety checker bypass
     "imageio[ffmpeg]", "librosa", "soundfile", "tqdm", "numba",
     "nest-asyncio",
