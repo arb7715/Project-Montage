@@ -35,6 +35,7 @@ _PKGS = [
     # preinstalled torch versions on hosted GPU images.
     "diffusers==0.27.2", "transformers==4.41.2",
     "accelerate==0.30.1", "safetensors==0.4.3",
+    "huggingface_hub==0.25.2",
     "invisible_watermark",          # required by SD safety checker bypass
     "imageio[ffmpeg]", "librosa", "soundfile", "tqdm", "numba",
     "nest-asyncio",
