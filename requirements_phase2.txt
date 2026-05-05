@@ -22,3 +22,6 @@ numpy>=1.24.0
 
 # Phase 4 web UI
 streamlit>=1.28.0
+
+# Phase 1 scriptwriter — Groq cloud LLM (with Ollama as local fallback)
+groq>=0.30.0

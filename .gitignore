@@ -18,6 +18,9 @@ outputs/
 # Ephemeral tunnel URL — copy from example
 config/colab_api.txt
 
+# Secrets — never commit
+config/groq_api.txt
+
 # IDE / OS
 .idea/
 .vscode/

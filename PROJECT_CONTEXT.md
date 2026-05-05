@@ -443,6 +443,16 @@ To keep this file highly token-efficient for future LLM handovers, every meaning
 
 ### 15.3 Change log (newest first)
 
+### 2026-05-06 00:25 (local) — Scriptwriter: Groq LLM + multi-character enforcement
+- Added: `config/groq_api.txt` (gitignored) and `config/groq_api.example.txt`. `.gitignore` now excludes `config/groq_api.txt`. `groq>=0.30.0` added to `requirements_phase2.txt`.
+- Changed: `src/agents/scriptwriter.py` rewritten — Groq Cloud (`llama-3.1-8b-instant`) is the primary script LLM; falls back to Ollama (`llama3.2:1b`) only if Groq is unavailable. New prompt forces ≥2 named characters across the script, ≥2 dialogues per scene, real `INT./EXT. PLACE - TIME` headings, and `scenes` array length == requested `num_scenes`. Post-parse code truncates over-produced scenes and pads under-produced ones with the existing default-scenes helper, then renumbers `scene_id` 1..N. Logs a warning if final character count <2.
+- Why: Local `llama3.2:1b` was producing 1-character, 1-line scenes with placeholder headings (e.g. "INT. LOCATION - DAY"); for a 2-scene request it generated 3 scenes. Result: garbled audio/video downstream.
+- Impact: Phase 1 now produces submission-quality manifests on simple prompts; downstream Phase 2/3 receives consistent characters and properly counted scenes. No hardcoded names in prompt — the LLM picks them.
+- Verified: Smoke run on the "job interview / past mistake" prompt — 2 scenes, characters `["Daniel","Sarah"]`, both speak in both scenes, headings `INT. SMALL OFFICE - MORNING`.
+
+### 2026-05-06 00:00 (local) — Streamlit subprocess stdin fix
+- Changed: `src/ui/app.py` — `subprocess.run(..., stdin=subprocess.DEVNULL)` so Phase 1 HITL detects non-interactive input and auto-approves. Without this, the subprocess inherited Streamlit's TTY stdin and `isatty()` returned True even from Streamlit, blocking forever.
+
 ### 2026-05-05 (local) — Streamlit Phase 1 hang + scene count wiring
 - Changed: `hitl_agent.py` — if `stdin` is not a TTY (Streamlit subprocess, CI), auto-approve script instead of blocking on `input()` forever; EOF on `input()` also approves (non-interactive).
 - Changed: `workflow.py` — `WorkflowState.num_scenes`; scriptwriter receives Streamlit/cli `--num-scenes` (was hardcoded to 3); `_coerce_state` filters dict keys to dataclass fields (LangGraph safety).
