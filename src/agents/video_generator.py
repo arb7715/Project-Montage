@@ -133,7 +133,7 @@ class VideoGeneratorAgent(BaseAgent):
         if scene_task.actions:
             action_text = scene_task.actions[0]
             # Strip known character names so they don't anchor the BG prompt
-            char_names = {c.lower() for c in (scene_task.characters or [])}
+            char_names = {c.lower() for c in (scene_task.character_names or [])}
             filtered = " ".join(
                 w for w in action_text.split()
                 if w.lower().rstrip(".,") not in char_names
