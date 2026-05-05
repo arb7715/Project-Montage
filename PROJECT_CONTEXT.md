@@ -445,21 +445,27 @@ To keep this file highly token-efficient for future LLM handovers, every meaning
 
 ### 15.3 Change log (newest first)
 
-### 2026-05-06 01:35 (local) — Wav2Lip real fix: anchor `temp/` to `/workspace`
-- Changed: `runpod_startup.py` `/lip_sync` — `temp_dir = WS / "temp"`; cleanup, recovery ffmpeg mux, and the "no output" file listing all use that absolute path. Stderr no longer truncated to 4 KB (now 8 KB) and the response includes a directory listing of `job/` and `temp/`. Face pre-crop is now opt-in via `WAV2LIP_FACE_CROP=1` env var (default off — matches the original colab path that worked).
-- Why: Previous "Bug A" diagnosis blamed SFD failing on SD portraits, but RunPod logs proved face detection succeeded (`face crop: (68,15,361,361)`) yet Wav2Lip still produced no output. Real cause is documented in section 6 gotchas: Wav2Lip writes `temp/result.mp4` relative to the subprocess cwd (`/workspace`), but our handler created/cleaned `Path("temp")` relative to wherever uvicorn was launched from. When those don't match, OpenCV's VideoWriter silently fails and `inference.py` exits 0 with no output — exactly the symptom we saw.
-- Impact: Wav2Lip should now produce real lip-synced video on RunPod. Identity portraits no longer need to be aggressively cropped to work.
-- Next: Rerun pipeline; if a /lip_sync still 500s, the error JSON now includes `files` listing + 8 KB stderr — read it before changing code.
+### 2026-05-06 02:05 (local) — Wav2Lip FOUND IT: ffmpeg missing on RunPod
+- Changed: `runpod_startup.py` — apt-installs `ffmpeg` at startup (`_ensure_ffmpeg()`); `/health` now reports `"ffmpeg": bool`; recovery mux is guarded by `shutil.which("ffmpeg")` and wrapped in try/except `FileNotFoundError` so the request can't crash if ffmpeg disappears mid-flight.
+- Why: Traceback from the *new* code (line 359) revealed `FileNotFoundError: 'ffmpeg'`. The RunPod PyTorch base image ships without ffmpeg. Wav2Lip's `inference.py` calls `ffmpeg` internally to mux the lip-synced video; when it's missing, the call fails silently and `inference.py` exits 0 with no output file — the *exact* `[lip_sync] rc: 0` symptom we'd been chasing across two false leads (face detection, temp dir).
+- Impact: After restart, ffmpeg is on PATH; Wav2Lip's own muxing succeeds and `out.mp4` is produced. Recovery mux remains as a safety net but should rarely fire.
+- Next: Stop the running uvicorn (`pkill -f runpod_startup.py`), `git pull`, restart `python runpod_startup.py`. Confirm `/health` returns `"ffmpeg": true` before re-running pipeline.
 
 ### 2026-05-06 — Clean `outputs/` for pipeline rerun (again)
-- Changed: Emptied repo `outputs/` again (recreate empty folder) for a fresh pipeline run.
-- Next: Run Phase 1 then Phase 2+3 (or full Streamlit pipeline).
+- Changed: Emptied repo `outputs/` again — same procedure as prior clean (recreate empty directory).
+- Next: Phase 1 → Phase 2+3 after RunPod server restart so `runpod_startup.py` changes are actually loaded.
 
 ### 2026-05-06 — Clean `outputs/` for pipeline rerun
 - Changed: Deleted all contents under repo `outputs/` (manifests, logs, audio, images, `raw_scenes`, `memory`, `versions`, etc.); recreated empty `outputs/` directory.
 - Why: Fresh end-to-end pipeline run without stale Phase 1–3 artifacts or version snapshots.
 - Impact: Phase 1 must be run again before Phase 2/3; `outputs/versions/` counters reset on next snapshot.
-- Next: Run full pipeline (Streamlit or `python -m src.main` then `python -m src.main_phase2`).
+- Next: Run full pipeline after updating RunPod from `runpod_startup.py` (`/workspace/temp` lip-sync fix).
+
+### 2026-05-06 01:35 (local) — Wav2Lip real fix: anchor `temp/` to `/workspace`
+- Changed: `runpod_startup.py` `/lip_sync` — `temp_dir = WS / "temp"`; cleanup, recovery ffmpeg mux, and the "no output" file listing all use that absolute path. Stderr no longer truncated to 4 KB (now 8 KB) and the response includes a directory listing of `job/` and `temp/`. Face pre-crop is now opt-in via `WAV2LIP_FACE_CROP=1` env var (default off — matches the original colab path that worked).
+- Why: Previous "Bug A" diagnosis blamed SFD failing on SD portraits, but RunPod logs proved face detection succeeded (`face crop: (68,15,361,361)`) yet Wav2Lip still produced no output. Real cause is documented in section 6 gotchas: Wav2Lip writes `temp/result.mp4` relative to the subprocess cwd (`/workspace`), but our handler created/cleaned `Path("temp")` relative to wherever uvicorn was launched from. When those don't match, OpenCV's VideoWriter silently fails and `inference.py` exits 0 with no output — exactly the symptom we saw.
+- Impact: Wav2Lip should now produce real lip-synced video on RunPod. Identity portraits no longer need to be aggressively cropped to work.
+- Next: Rerun pipeline; if a /lip_sync still 500s, the error JSON now includes `files` listing + 8 KB stderr — read it before changing code.
 
 ### 2026-05-06 01:10 (local) — Bug A + Bug B fixes (Wav2Lip face detection & background diversity)
 - Changed: `runpod_startup.py` — added `_crop_face_for_wav2lip()` helper (OpenCV Haar + center-top fallback); wired into `/lip_sync` endpoint before `_image_to_video` so Wav2Lip always receives a 256×256 head-shot crop instead of the raw SD portrait.

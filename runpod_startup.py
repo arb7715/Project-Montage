@@ -28,6 +28,26 @@ import io, os, re, sys, shutil, subprocess, threading, time, traceback, uuid, wa
 import urllib.request
 from pathlib import Path
 
+# ── apt installs (idempotent) ────────────────────────────────────────────────
+# RunPod PyTorch images don't ship with `ffmpeg`. Wav2Lip's inference.py
+# calls ffmpeg internally to mux the lip-synced video; without it the script
+# exits 0 with no output file (silent failure). Install it once.
+def _ensure_ffmpeg():
+    if shutil.which("ffmpeg"):
+        return
+    print("Installing ffmpeg via apt …")
+    subprocess.run(["apt-get", "update", "-qq"], check=False)
+    subprocess.run(
+        ["apt-get", "install", "-y", "-qq", "--no-install-recommends", "ffmpeg"],
+        check=False,
+    )
+    if shutil.which("ffmpeg"):
+        print("ffmpeg installed.")
+    else:
+        print("[!] ffmpeg still not found after apt install — Wav2Lip will fail.")
+
+_ensure_ffmpeg()
+
 # ── pip installs (idempotent) ────────────────────────────────────────────────
 _PKGS = [
     "fastapi", "uvicorn[standard]", "python-multipart",
@@ -159,6 +179,7 @@ async def health():
         "status": "ok",
         "gpu": torch.cuda.get_device_name(0) if torch.cuda.is_available() else "cpu",
         "ip_adapter": IP_ADAPTER_OK,
+        "ffmpeg": bool(shutil.which("ffmpeg")),
     }
 
 
@@ -352,17 +373,23 @@ async def lip_sync(audio: UploadFile = File(...), face: UploadFile = File(...)):
     print("[lip_sync] rc:", proc.returncode)
 
     # Recovery path: if Wav2Lip's internal ffmpeg muxing failed but the raw
-    # frames file exists, mux it ourselves. Use absolute paths.
-    if not out_video.exists():
+    # frames file exists, mux it ourselves. Use absolute paths and never let
+    # a missing-ffmpeg surface as an unhandled exception.
+    if not out_video.exists() and shutil.which("ffmpeg"):
         for candidate in (temp_dir / "result.mp4", temp_dir / "result.avi"):
             if candidate.exists() and candidate.stat().st_size > 0:
-                rc = subprocess.run(
-                    ["ffmpeg", "-y", "-i", str(candidate), "-i", str(audio_path),
-                     "-c:v", "libx264", "-pix_fmt", "yuv420p",
-                     "-c:a", "aac", "-b:a", "128k", "-shortest", str(out_video)],
-                    capture_output=True, text=True, timeout=120,
-                )
-                print(f"[lip_sync] manual mux rc={rc.returncode}")
+                try:
+                    rc = subprocess.run(
+                        ["ffmpeg", "-y", "-i", str(candidate), "-i", str(audio_path),
+                         "-c:v", "libx264", "-pix_fmt", "yuv420p",
+                         "-c:a", "aac", "-b:a", "128k", "-shortest", str(out_video)],
+                        capture_output=True, text=True, timeout=120,
+                    )
+                    print(f"[lip_sync] manual mux rc={rc.returncode}")
+                except FileNotFoundError:
+                    print("[lip_sync] ffmpeg disappeared at runtime; skipping mux")
+                except Exception as exc:
+                    print(f"[lip_sync] manual mux crashed: {exc}")
                 break
 
     if not out_video.exists():
