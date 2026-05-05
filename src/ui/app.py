@@ -87,14 +87,26 @@ def _save_gpu_url(url: str) -> None:
 
 def _check_health(url: str) -> tuple[bool, str]:
     """Return (ok, message) from the /health endpoint."""
+    base = (url or "").strip()
+    if base.endswith("/health"):
+        base = base[:-7]
+    health_url = base.rstrip("/") + "/health"
     try:
-        req = urllib.request.urlopen(url.rstrip("/") + "/health", timeout=5)
+        req_obj = urllib.request.Request(
+            health_url,
+            headers={
+                # RunPod/Cloudflare can reject header-less urllib requests.
+                "User-Agent": "Mozilla/5.0 (ProjectMontage/1.0)",
+                "Accept": "application/json",
+            },
+        )
+        req = urllib.request.urlopen(req_obj, timeout=8)
         import json
         data = json.loads(req.read().decode())
         gpu  = data.get("gpu", "unknown GPU")
         return True, f"Online · {gpu}"
     except Exception as exc:
-        return False, str(exc)[:120]
+        return False, f"{exc} ({health_url})"[:180]
 
 
 # Alias kept for backward compatibility with pipeline agents that read this file
